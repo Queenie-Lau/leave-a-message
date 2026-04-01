@@ -1,0 +1,42 @@
+@import "tailwindcss";
+@reference "tailwindcss";
+
+/* 1. Define your custom theme for v4 */
+@theme {
+  --color-neon: #dfff00;
+  --color-dark: #0a0a0a;
+  --font-serif: "Times New Roman", serif;
+}
+
+/* 2. Global Reset - This is why your text was black */
+:root {
+  background-color: #0a0a0a;
+  color: #dfff00;
+  /* Forces all text to be Neon by default */
+}
+
+@layer base {
+  body {
+    @apply bg-dark text-neon antialiased selection:bg-neon selection:text-dark;
+    margin: 0;
+    padding: 0;
+  }
+}
+
+/* 3. The Grain Texture Effect */
+.bg-grain {
+  background-image: url("https://grainy-gradients.vercel.app/noise.svg");
+  filter: contrast(150%) brightness(1000%);
+  pointer-events: none;
+}
+
+/* 4. Custom Component Classes (using @apply) */
+@layer components {
+  .btn-primary {
+    @apply flex items-center gap-4 border border-neon rounded-full px-10 py-4 hover:bg-neon/10 transition-all duration-500 text-neon font-bold uppercase;
+  }
+
+  .design-input {
+    @apply bg-transparent border-b border-neon/30 py-4 outline-none text-2xl uppercase text-neon focus:border-neon transition-colors;
+  }
+}
