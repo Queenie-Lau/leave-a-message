@@ -133,65 +133,66 @@ export default function RecordPage() {
 
   // ── Progress animation loop ───────────────────────────────────────────────
   const tickProgress = useCallback(() => {
-    const ctx = audioCtxRef.current;
-    const buf = audioBufferRef.current;
-    if (!ctx || !buf) return;
+  const ctx = audioCtxRef.current;
+  const buf = audioBufferRef.current;
+  if (!ctx || !buf || !isPlaying) return;
 
-    const currentOffset = ctx.currentTime - startTimeRef.current + offsetRef.current;
-    const pct = Math.min(currentOffset / buf.duration, 1);
-    setProgress(pct);
+  // ctx.currentTime is absolute, so we subtract the moment we hit 'play'
+  const currentOffset = (ctx.currentTime - startTimeRef.current) + offsetRef.current;
+  const pct = Math.min(currentOffset / buf.duration, 1);
+  
+  setProgress(pct);
 
-    if (pct < 1) {
-      rafRef.current = requestAnimationFrame(tickProgress);
-    } else {
-      // Reached end
+  if (pct < 1 && isPlaying) {
+    rafRef.current = requestAnimationFrame(tickProgress);
+  }
+}, [isPlaying]);
+
+  // ── Play ──────────────────────────────────────────────────────────────────
+const play = useCallback(() => {
+  const ctx = audioCtxRef.current;
+  const buf = audioBufferRef.current;
+  if (!ctx || !buf || isPlaying) return;
+
+  if (ctx.state === 'suspended') ctx.resume();
+
+  const source = ctx.createBufferSource();
+  source.buffer = buf;
+  source.connect(ctx.destination);
+  
+  // startTimeRef stores the "World Time" of the AudioContext when we hit play
+  startTimeRef.current = ctx.currentTime;
+  source.start(0, offsetRef.current);
+  sourceRef.current = source;
+
+  source.onended = () => {
+    // Only reset if the sound actually finished on its own
+    if (sourceRef.current === source) {
       setIsPlaying(false);
       setProgress(0);
       offsetRef.current = 0;
     }
-  }, []);
+  };
 
-  // ── Play ──────────────────────────────────────────────────────────────────
-  const play = useCallback(() => {
-    const ctx = audioCtxRef.current;
-    const buf = audioBufferRef.current;
-    if (!ctx || !buf) return;
+  setIsPlaying(true);
+  // Kick off the animation frame
+  rafRef.current = requestAnimationFrame(tickProgress);
+}, [isPlaying, tickProgress]);
 
-    // Resume suspended context (required after user gesture on some browsers)
-    if (ctx.state === 'suspended') ctx.resume();
+const pause = useCallback(() => {
+  if (!isPlaying) return;
+  
+  const ctx = audioCtxRef.current;
+  if (ctx) {
+    // Calculate how far we got before hitting pause
+    const elapsedSincePlay = ctx.currentTime - startTimeRef.current;
+    offsetRef.current += elapsedSincePlay;
+  }
 
-    stopAudio();
-
-    const source = ctx.createBufferSource();
-    source.buffer = buf;
-    source.connect(ctx.destination);
-    source.start(0, offsetRef.current);
-    sourceRef.current = source;
-    startTimeRef.current = ctx.currentTime;
-
-    source.onended = () => {
-      // Only reset if we didn't manually pause
-      if (sourceRef.current === source) {
-        setIsPlaying(false);
-        setProgress(0);
-        offsetRef.current = 0;
-        sourceRef.current = null;
-      }
-    };
-
-    setIsPlaying(true);
-    rafRef.current = requestAnimationFrame(tickProgress);
-  }, [tickProgress]);
-
-  // ── Pause ─────────────────────────────────────────────────────────────────
-  const pause = useCallback(() => {
-    const ctx = audioCtxRef.current;
-    if (!ctx) return;
-    // Save position so we can resume from here
-    offsetRef.current = ctx.currentTime - startTimeRef.current + offsetRef.current;
-    stopAudio();
-    setIsPlaying(false);
-  }, []);
+  stopAudio();
+  setIsPlaying(false);
+  cancelAnimationFrame(rafRef.current);
+}, [isPlaying]);
 
   const togglePlayback = () => isPlaying ? pause() : play();
 
@@ -205,72 +206,65 @@ export default function RecordPage() {
   };
 
   // ── Start recording ───────────────────────────────────────────────────────
+
 const startRecording = async () => {
-    setUploadError(null);
-    setDecodeError(false);
-    chunksRef.current = [];
+  setUploadError(null);
+  setDecodeError(false);
+  chunksRef.current = [];
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 44100, // Explicitly set to standard CD quality
-        },
-      });
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
 
-      // 1. Force the most stable codec for Chrome/Brave
-      const mimeType = 'audio/webm;codecs=opus';
-      const recorder = new MediaRecorder(stream, { 
-        mimeType,
-        audioBitsPerSecond: 128000 
-      });
-      
-      mediaRecorderRef.current = recorder;
+    const mimeType = 'audio/webm;codecs=opus';
+    const recorder = new MediaRecorder(stream, { 
+      mimeType,
+      audioBitsPerSecond: 128000 
+    });
+    
+    mediaRecorderRef.current = recorder;
 
-      recorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) {
-          chunksRef.current.push(e.data);
-          console.log("Chunk received:", e.data.size);
-        }
-      };
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+    };
 
-      recorder.onstop = async () => {
-        stopRecTimer();
-        
-        // 2. Combine chunks into the final Blob
-        const blob = new Blob(chunksRef.current, { type: mimeType });
-        console.log("Final Blob Size:", blob.size);
-
-        if (blob.size < 2000) {
-          setUploadError("Recording too short or silent.");
-          setRecState('idle');
-          killTracks();
-          return;
-        }
-
-        setAudioBlob(blob);
-        setRecState('preview');
-        killTracks();
-      };
-
-      // 3. Give the hardware 200ms to "prime" before starting the recorder
-      await new Promise(resolve => setTimeout(resolve, 200));
-      
-      recorder.start(100); // Small slices to prevent data loss
+    // THIS IS THE KEY: Only start the clock when the hardware actually fires 'start'
+    recorder.onstart = () => {
       setRecState('recording');
-      
+      setElapsed(0);
       const startTime = Date.now();
       recTimerRef.current = setInterval(() => {
         setElapsed(Math.floor((Date.now() - startTime) / 1000));
       }, 1000);
+    };
 
-    } catch (err: any) {
-      console.error("Mic error:", err);
-      setUploadError("Could not access microphone.");
-      setRecState('idle');
-    }
-  };
+    recorder.onstop = () => {
+      stopRecTimer();
+      const blob = new Blob(chunksRef.current, { type: mimeType });
+      
+      if (blob.size > 1000) {
+        setAudioBlob(blob);
+        setRecState('preview');
+      } else {
+        setUploadError("Recording was too short.");
+        setRecState('idle');
+      }
+      killTracks();
+    };
+
+    // Start IMMEDIATELY. No timeouts.
+    recorder.start(100); 
+
+  } catch (err: any) {
+    setUploadError("Microphone access failed.");
+    setRecState('idle');
+  }
+};
 
   // ── Stop recording ────────────────────────────────────────────────────────
   const stopRecording = () => {
