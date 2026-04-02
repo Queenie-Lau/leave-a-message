@@ -30,7 +30,7 @@ export default function HeroSection() {
         {/* Bottom Bar */}
         <div className="w-full flex flex-col md:flex-row items-center justify-between border-t border-neon/30 pt-8 gap-6">
           <p className="max-w-xs text-[10px] uppercase tracking-[0.2em] leading-relaxed text-neon/70">
-            Pick up the phone and record a digital voicemail for your loved ones to keep forever.
+            Pick up the phone and record a digital voicemail for your loved ones to keep forever
           </p>
           
           {/* Use Link for actual navigation */}

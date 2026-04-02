@@ -1,6 +1,16 @@
 @import "tailwindcss";
 @reference "tailwindcss";
 
+* {
+  cursor: auto;
+}
+
+button,
+a,
+[role="button"] {
+  cursor: pointer;
+}
+
 /* 1. Define your custom theme for v4 */
 @theme {
   --color-neon: #dfff00;
@@ -21,13 +31,6 @@
     margin: 0;
     padding: 0;
   }
-}
-
-/* 3. The Grain Texture Effect */
-.bg-grain {
-  background-image: url("https://grainy-gradients.vercel.app/noise.svg");
-  filter: contrast(150%) brightness(1000%);
-  pointer-events: none;
 }
 
 /* 4. Custom Component Classes (using @apply) */
