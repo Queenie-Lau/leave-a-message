@@ -35,10 +35,10 @@ export default function RecordPage() {
   const [uploadError, setUploadError] = useState<string | null>(null);
 
   // ── Web Audio player state ────────────────────────────────────────────────
-  const [isPlaying, setIsPlaying]   = useState(false);
-  const [progress, setProgress]     = useState(0);   // 0–1
-  const [duration, setDuration]     = useState(0);   // seconds
-  const [decoding, setDecoding]     = useState(false);
+  const [isPlaying, setIsPlaying]     = useState(false);
+  const [progress, setProgress]       = useState(0);   // 0–1
+  const [duration, setDuration]       = useState(0);   // seconds
+  const [decoding, setDecoding]       = useState(false);
   const [decodeError, setDecodeError] = useState(false);
 
   // ── Recorder refs ─────────────────────────────────────────────────────────
@@ -65,20 +65,41 @@ export default function RecordPage() {
     fetchEvent();
   }, [params.slug]);
 
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  const stopRecTimer = useCallback(() => {
+    if (recTimerRef.current) { 
+      clearInterval(recTimerRef.current); 
+      recTimerRef.current = null; 
+    }
+  }, []);
+
+  const killTracks = useCallback(() => {
+    mediaRecorderRef.current?.stream?.getTracks().forEach(t => t.stop());
+  }, []);
+
+  const stopAudio = useCallback(() => {
+    if (sourceRef.current) {
+      // PREVENT onended from firing when we manually stop (fixes scrub/pause bug)
+      sourceRef.current.onended = null; 
+      try { sourceRef.current.stop(); } catch (_) {}
+      sourceRef.current = null;
+    }
+    cancelAnimationFrame(rafRef.current);
+  }, []);
+
   // ── Cleanup ───────────────────────────────────────────────────────────────
-    useEffect(() => {
+  useEffect(() => {
     return () => {
-        stopRecTimer();
-        killTracks();
-        stopAudio();
-        cancelAnimationFrame(rafRef.current);
-        // Use a local ref to check state
-        const ctx = audioCtxRef.current;
-        if (ctx && ctx.state !== 'closed') {
+      stopRecTimer();
+      killTracks();
+      stopAudio();
+      const ctx = audioCtxRef.current;
+      if (ctx && ctx.state !== 'closed') {
         ctx.close().catch(() => {});
-        }
+      }
     };
-    }, []);
+  }, [stopRecTimer, killTracks, stopAudio]);
+
   // ── Decode blob into Web Audio buffer when we hit preview ────────────────
   useEffect(() => {
     if (recState !== 'preview' || !audioBlob) return;
@@ -98,7 +119,6 @@ export default function RecordPage() {
           audioBufferRef.current = decoded;
           setDuration(decoded.duration);
           setDecoding(false);
-          console.log('[Audio] Decoded OK — duration:', decoded.duration.toFixed(2), 's, channels:', decoded.numberOfChannels, 'sampleRate:', decoded.sampleRate);
         },
         (err) => {
           console.error('[Audio] decodeAudioData failed:', err);
@@ -108,175 +128,168 @@ export default function RecordPage() {
       );
     });
 
-    // Inside the useEffect([recState, audioBlob])
     return () => {
-    stopAudio();
-    // Only close if it's not already closed or closing
-    if (ctx.state !== 'closed') {
-        ctx.close().catch(err => console.debug('Ctx already closing:', err));
-    }
+      stopAudio();
+      if (ctx.state !== 'closed') {
+        ctx.close().catch(() => {});
+      }
     };
-  }, [recState, audioBlob]);
+  }, [recState, audioBlob, stopAudio]);
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
-  const stopRecTimer = () => {
-    if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null; }
-  };
-  const killTracks = () => {
-    mediaRecorderRef.current?.stream?.getTracks().forEach(t => t.stop());
-  };
-  const stopAudio = () => {
-    try { sourceRef.current?.stop(); } catch (_) {}
-    sourceRef.current = null;
-    cancelAnimationFrame(rafRef.current);
-  };
 
   // ── Progress animation loop ───────────────────────────────────────────────
   const tickProgress = useCallback(() => {
-  const ctx = audioCtxRef.current;
-  const buf = audioBufferRef.current;
-  if (!ctx || !buf || !isPlaying) return;
+    const ctx = audioCtxRef.current;
+    const buf = audioBufferRef.current;
+    if (!ctx || !buf) return;
 
-  // ctx.currentTime is absolute, so we subtract the moment we hit 'play'
-  const currentOffset = (ctx.currentTime - startTimeRef.current) + offsetRef.current;
-  const pct = Math.min(currentOffset / buf.duration, 1);
-  
-  setProgress(pct);
+    const currentOffset = (ctx.currentTime - startTimeRef.current) + offsetRef.current;
+    const pct = Math.min(currentOffset / buf.duration, 1);
+    
+    setProgress(pct);
 
-  if (pct < 1 && isPlaying) {
-    rafRef.current = requestAnimationFrame(tickProgress);
-  }
-}, [isPlaying]);
+    if (pct < 1) {
+      rafRef.current = requestAnimationFrame(tickProgress);
+    }
+  }, []);
 
   // ── Play ──────────────────────────────────────────────────────────────────
-const play = useCallback(() => {
-  const ctx = audioCtxRef.current;
-  const buf = audioBufferRef.current;
-  if (!ctx || !buf || isPlaying) return;
+  const play = useCallback(() => {
+    const ctx = audioCtxRef.current;
+    const buf = audioBufferRef.current;
+    if (!ctx || !buf) return;
 
-  if (ctx.state === 'suspended') ctx.resume();
+    if (ctx.state === 'suspended') ctx.resume();
 
-  const source = ctx.createBufferSource();
-  source.buffer = buf;
-  source.connect(ctx.destination);
-  
-  // startTimeRef stores the "World Time" of the AudioContext when we hit play
-  startTimeRef.current = ctx.currentTime;
-  source.start(0, offsetRef.current);
-  sourceRef.current = source;
+    stopAudio(); // kill any existing sources
 
-  source.onended = () => {
-    // Only reset if the sound actually finished on its own
-    if (sourceRef.current === source) {
+    const source = ctx.createBufferSource();
+    source.buffer = buf;
+    source.connect(ctx.destination);
+    
+    startTimeRef.current = ctx.currentTime;
+    source.start(0, offsetRef.current);
+    sourceRef.current = source;
+
+    // This natural end ONLY fires if the track finishes (because stopAudio removes it)
+    source.onended = () => {
       setIsPlaying(false);
       setProgress(0);
       offsetRef.current = 0;
+      sourceRef.current = null;
+    };
+
+    setIsPlaying(true);
+    rafRef.current = requestAnimationFrame(tickProgress);
+  }, [tickProgress, stopAudio]);
+
+  // ── Pause ─────────────────────────────────────────────────────────────────
+  const pause = useCallback(() => {
+    const ctx = audioCtxRef.current;
+    // If sourceRef is active, it means we are truly pausing mid-play
+    if (ctx && sourceRef.current) {
+      offsetRef.current += (ctx.currentTime - startTimeRef.current);
     }
-  };
-
-  setIsPlaying(true);
-  // Kick off the animation frame
-  rafRef.current = requestAnimationFrame(tickProgress);
-}, [isPlaying, tickProgress]);
-
-const pause = useCallback(() => {
-  if (!isPlaying) return;
-  
-  const ctx = audioCtxRef.current;
-  if (ctx) {
-    // Calculate how far we got before hitting pause
-    const elapsedSincePlay = ctx.currentTime - startTimeRef.current;
-    offsetRef.current += elapsedSincePlay;
-  }
-
-  stopAudio();
-  setIsPlaying(false);
-  cancelAnimationFrame(rafRef.current);
-}, [isPlaying]);
+    stopAudio();
+    setIsPlaying(false);
+  }, [stopAudio]);
 
   const togglePlayback = () => isPlaying ? pause() : play();
 
   // ── Scrub ─────────────────────────────────────────────────────────────────
   const handleScrub = (e: React.ChangeEvent<HTMLInputElement>) => {
     const pct = parseFloat(e.target.value);
-    const newOffset = pct * (audioBufferRef.current?.duration ?? 0);
-    offsetRef.current = newOffset;
+    const buf = audioBufferRef.current;
+    if (!buf) return;
+
+    const wasPlaying = !!sourceRef.current;
+    stopAudio(); 
+    
+    offsetRef.current = pct * buf.duration;
     setProgress(pct);
-    if (isPlaying) play(); // restart from new position
+
+    if (wasPlaying) play(); 
   };
 
   // ── Start recording ───────────────────────────────────────────────────────
+  const startRecording = async () => {
+    if (recState !== 'idle') return; // Prevent double-clicks / overlapping hardware calls
 
-const startRecording = async () => {
-  setUploadError(null);
-  setDecodeError(false);
-  chunksRef.current = [];
-
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
-
-    const mimeType = 'audio/webm;codecs=opus';
-    const recorder = new MediaRecorder(stream, { 
-      mimeType,
-      audioBitsPerSecond: 128000 
-    });
+    stopRecTimer();
+    killTracks();
+    setUploadError(null);
+    setDecodeError(false);
+    setElapsed(0);
+    chunksRef.current = [];
     
-    mediaRecorderRef.current = recorder;
+    // Hide start button immediately for responsive UI
+    setRecState('recording'); 
 
-    recorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
-    };
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
 
-    // THIS IS THE KEY: Only start the clock when the hardware actually fires 'start'
-    recorder.onstart = () => {
-      setRecState('recording');
-      setElapsed(0);
-      const startTime = Date.now();
-      recTimerRef.current = setInterval(() => {
-        setElapsed(Math.floor((Date.now() - startTime) / 1000));
-      }, 1000);
-    };
-
-    recorder.onstop = () => {
-      stopRecTimer();
-      const blob = new Blob(chunksRef.current, { type: mimeType });
+      const mimeType = 'audio/webm;codecs=opus';
+      const recorder = new MediaRecorder(stream, { 
+        mimeType,
+        audioBitsPerSecond: 128000 
+      });
       
-      if (blob.size > 1000) {
-        setAudioBlob(blob);
-        setRecState('preview');
-      } else {
-        setUploadError("Recording was too short.");
-        setRecState('idle');
-      }
-      killTracks();
-    };
+      mediaRecorderRef.current = recorder;
 
-    // Start IMMEDIATELY. No timeouts.
-    recorder.start(100); 
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+      };
 
-  } catch (err: any) {
-    setUploadError("Microphone access failed.");
-    setRecState('idle');
-  }
-};
+      recorder.onstart = () => {
+        stopRecTimer(); // Bulletproof timer clearing
+        mimeTypeRef.current = recorder.mimeType || mimeType; // Required for proper Supabase upload
+        setElapsed(0);
+        const startTime = Date.now();
+        recTimerRef.current = setInterval(() => {
+          setElapsed(Math.floor((Date.now() - startTime) / 1000));
+        }, 100);
+      };
+
+      recorder.onstop = () => {
+        stopRecTimer();
+        const blob = new Blob(chunksRef.current, { type: mimeType });
+        
+        if (blob.size > 1000) {
+          setAudioBlob(blob);
+          setRecState('preview');
+        } else {
+          setUploadError("Recording was too short.");
+          setRecState('idle');
+        }
+        killTracks();
+      };
+
+      recorder.start(100); 
+
+    } catch (err: any) {
+      setUploadError("Microphone access failed. Please check browser permissions.");
+      setRecState('idle');
+    }
+  };
 
   // ── Stop recording ────────────────────────────────────────────────────────
   const stopRecording = () => {
     const rec = mediaRecorderRef.current;
     if (!rec || rec.state === 'inactive') return;
-    rec.stop(); // ondataavailable fires once more before onstop
+    rec.stop(); 
   };
 
   // ── Reset ─────────────────────────────────────────────────────────────────
-    const reset = () => {
+  const reset = () => {
+    stopRecTimer();
+    killTracks();
     stopAudio();
-    // Let the useEffect cleanup handle the context close by changing state
     audioBufferRef.current = null;
     offsetRef.current = 0;
     setAudioBlob(null);
@@ -286,8 +299,9 @@ const startRecording = async () => {
     setDecodeError(false);
     setElapsed(0);
     setUploadError(null);
-    setRecState('idle'); // This change triggers the useEffect return cleanup
-    };
+    setRecState('idle'); 
+  };
+
   // ── Upload ────────────────────────────────────────────────────────────────
   const saveVoicemail = async () => {
     if (!audioBlob || !eventData) return;
@@ -330,13 +344,11 @@ const startRecording = async () => {
 
       <div className="z-10 text-center flex flex-col gap-8 max-w-lg w-full">
 
-        {/* Header */}
         <header>
           <p className="text-[10px] uppercase tracking-[0.4em] opacity-50 mb-2">Recording for</p>
           <h1 className="text-4xl md:text-5xl font-serif italic leading-tight">{eventData.name}</h1>
         </header>
 
-        {/* Status Circle */}
         <div className={`
           w-48 h-48 md:w-64 md:h-64 rounded-full border-2 mx-auto flex flex-col items-center justify-center gap-3
           transition-all duration-500
@@ -377,22 +389,17 @@ const startRecording = async () => {
           {isUploading && <div className="w-8 h-8 border-2 border-neon border-t-transparent rounded-full animate-spin" />}
         </div>
 
-        {/* Custom audio progress bar — only shown in preview */}
         {isPreview && !decoding && !decodeError && (
           <div className="flex flex-col gap-2 px-1">
-            {/* Scrubber */}
             <div className="relative h-1 bg-neon/10 rounded-full overflow-visible">
-              {/* Filled track */}
               <div
                 className="absolute inset-y-0 left-0 bg-neon/60 rounded-full transition-none"
                 style={{ width: `${progress * 100}%` }}
               />
-              {/* Thumb */}
               <div
                 className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-neon rounded-full shadow-[0_0_8px_rgba(var(--neon-rgb),0.8)] transition-none"
                 style={{ left: `calc(${progress * 100}% - 6px)` }}
               />
-              {/* Invisible range input for scrubbing */}
               <input
                 type="range"
                 min={0}
@@ -403,7 +410,6 @@ const startRecording = async () => {
                 className="absolute inset-0 w-full opacity-0 cursor-pointer h-full"
               />
             </div>
-            {/* Time labels */}
             <div className="flex justify-between text-[10px] font-mono opacity-40">
               <span>{formatTime(progress * duration)}</span>
               <span>{formatTime(duration)}</span>
@@ -411,14 +417,12 @@ const startRecording = async () => {
           </div>
         )}
 
-        {/* Error */}
         {(uploadError || decodeError) && (
           <p className="text-red-400 text-xs uppercase tracking-widest opacity-80 px-4">
             {uploadError || 'Could not decode audio. Try recording again.'}
           </p>
         )}
 
-        {/* Controls */}
         <div className="flex flex-col gap-4">
 
           {recState === 'idle' && (
