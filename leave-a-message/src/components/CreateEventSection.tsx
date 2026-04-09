@@ -10,35 +10,49 @@ export default function CreateEventSection() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const router = useRouter();
 
+  // Helper to generate a small random suffix
+  const generateId = () => Math.random().toString(36).substring(2, 6);
+
   const handleCreate = async () => {
-    console.log("🚀 handleCreate triggered");
     if (!eventName) return alert("Please enter an event name");
     
     setIsSubmitting(true);
 
-    const slug = eventName
+    // 1. Create the base slug
+    const baseSlug = eventName
       .toLowerCase()
       .trim()
       .replace(/[^\w\s-]/g, '')
       .replace(/[\s_-]+/g, '-')
       .replace(/^-+|-+$/g, '');
 
+    // 2. Append a random 4-character string immediately
+    const uniqueSlug = `${baseSlug}-${generateId()}`;
+
     try {
-      console.log("☁️ Inserting to Supabase:", { eventName, slug });
+      console.log("☁️ Inserting unique slug:", uniqueSlug);
+      
       const { data, error } = await supabase
         .from('events')
-        .insert([{ name: eventName, slug: slug, password: password }])
-        .select();
+        .insert([{ 
+          name: eventName, 
+          slug: uniqueSlug, 
+          password: password 
+        }])
+        .select()
+        .single();
 
-      if (error) {
-        console.error("❌ Supabase Error:", error);
-        alert(`Error: ${error.message}`);
-      } else if (data) {
+      if (error) throw error;
+
+      if (data) {
         console.log("✅ Success! Redirecting...");
-        router.push(`/dashboard/${data[0].slug}`);
+        // Ensure this route matches your file structure (e.g., /dashboard/[slug])
+        router.push(`/dashboard/${data.slug}`);
       }
-    } catch (err) {
-      console.error("💥 Crash:", err);
+    } catch (err: any) {
+      console.error("💥 Error:", err);
+      // Detailed error logging to help you debug
+      alert(`Error: ${err.message || "Failed to create event"}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -46,10 +60,7 @@ export default function CreateEventSection() {
 
   return (
     <section className="flex-1 flex items-center justify-center p-10 mt-20 min-h-[80vh] relative">
-
       <div className="grid grid-cols-1 md:grid-cols-2 gap-20 max-w-7xl w-full items-center relative">
-        
-        {/* Left Column - Higher Z-Index */}
         <div className="flex flex-col gap-10 relative z-[100]">
           <h2 className="text-7xl md:text-8xl font-serif italic text-neon leading-[0.9] tracking-tighter">
             Create <br /> Event
@@ -80,10 +91,7 @@ export default function CreateEventSection() {
 
             <button  
               type='button'
-              onClick={() => {
-                console.log("🖱️ Button Clicked");
-                handleCreate();
-              }}
+              onClick={handleCreate}
               disabled={isSubmitting}
               className="w-full bg-neon text-black py-6 rounded-full font-black uppercase tracking-widest mt-6 cursor-pointer relative z-[110] hover:scale-105 active:scale-95 transition-all disabled:opacity-50"
             >
@@ -91,12 +99,6 @@ export default function CreateEventSection() {
             </button>
           </div>
         </div>
-
-        {/* Right Column - Lower Z-Index */}
-<div className="hidden md:block relative h-[700px] z-0 pointer-events-none select-none">
-  <div className="pointer-events-none absolute top-1/2 left-1/2 ..." />
-  <div className="pointer-events-none absolute inset-0 ..." />
-</div>
       </div>
     </section>
   );

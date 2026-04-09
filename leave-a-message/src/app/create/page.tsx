@@ -1,6 +1,7 @@
 'use client';
 
 import Navigation from '@/components/Navigation';
+import Footer from '@/components/Footer';
 import CreateEventSection from '@/components/CreateEventSection';
 
 export default function CreatePage() {
@@ -13,6 +14,7 @@ export default function CreatePage() {
         <div className="flex-1 flex flex-col">
           <CreateEventSection />
         </div>
+        <Footer />
       </div>
     </main>
   );

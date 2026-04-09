@@ -3,7 +3,10 @@
 import { useParams } from 'next/navigation';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
+import Link from 'next/link';
 import { Mic, Square, Send, RotateCcw, Check, Play, Pause } from 'lucide-react';
+import Navigation from '@/components/Navigation';
+import Footer from '@/components/Footer';
 
 function getSupportedMimeType(): string {
   const candidates = ['audio/webm', 'audio/mp4', 'audio/ogg'];
@@ -219,7 +222,6 @@ export default function RecordPage() {
       const sourceNode = liveCtx.createMediaStreamSource(stream);
       const destinationNode = liveCtx.createMediaStreamDestination();
 
-      // 1. Voice EQ
       const voiceHighpass = liveCtx.createBiquadFilter();
       voiceHighpass.type = 'highpass';
       voiceHighpass.frequency.value = 500; 
@@ -232,7 +234,6 @@ export default function RecordPage() {
       distortion.curve = makeDistortionCurve(15);
       distortion.oversample = '4x';
 
-      // 2. Pink Noise (Mechanical Static)
       const bufferSize = liveCtx.sampleRate * 2;
       const noiseBuffer = liveCtx.createBuffer(1, bufferSize, liveCtx.sampleRate);
       const output = noiseBuffer.getChannelData(0);
@@ -257,14 +258,13 @@ export default function RecordPage() {
       noiseSource.loop = true;
       liveNoiseRef.current = noiseSource;
 
-      // Filter the noise itself so it stays in the phone's frequency range
       const noiseFilter = liveCtx.createBiquadFilter();
       noiseFilter.type = 'bandpass';
       noiseFilter.frequency.value = 1800;
       noiseFilter.Q.value = 0.7;
 
       const noiseMixer = liveCtx.createGain();
-      noiseMixer.gain.value = 0.008; // Subdued, constant grit
+      noiseMixer.gain.value = 0.008; 
 
       sourceNode.connect(voiceHighpass);
       voiceHighpass.connect(voiceLowpass);
@@ -323,14 +323,40 @@ export default function RecordPage() {
     setElapsed(0); setUploadError(null); setRecState('idle'); 
   };
 
-  const saveVoicemail = async () => {
-    if (!audioBlob || !eventData) return;
-    setRecState('uploading'); stopAudio();
-    const ext = mimeToExtension(mimeTypeRef.current);
-    const fileName = `${eventData.id}/${Date.now()}.${ext}`;
-    const { error } = await supabase.storage.from('voicemails').upload(fileName, audioBlob, { contentType: audioBlob.type });
-    if (error) { setUploadError(`Upload failed: ${error.message}`); setRecState('preview'); } else { setRecState('done'); }
-  };
+const saveVoicemail = async () => {
+  if (!audioBlob || !eventData) return;
+  setRecState('uploading');
+  stopAudio();
+
+  const ext = mimeToExtension(mimeTypeRef.current);
+  const fileName = `${eventData.id}/${Date.now()}.${ext}`;
+
+  const { error: storageError } = await supabase.storage
+    .from('voicemails')
+    .upload(fileName, audioBlob, { contentType: audioBlob.type });
+
+  if (storageError) {
+    setUploadError(`Upload failed: ${storageError.message}`);
+    setRecState('preview');
+    return;
+  }
+
+  const { error: dbError } = await supabase
+    .from('messages')
+    .insert({
+      event_id: eventData.id,
+      audio_path: fileName,
+      duration: Math.floor(duration),
+      guest_name: 'Guest'
+    });
+
+  if (dbError) {
+    setUploadError(`Database error: ${dbError.message}`);
+    setRecState('preview');
+  } else {
+    setRecState('done');
+  }
+};
 
   if (!eventData) return <div className="min-h-screen bg-[#0a0a0a] text-neon flex items-center justify-center"><p className="text-[10px] uppercase tracking-[0.4em] opacity-50 animate-pulse">Loading…</p></div>;
 
@@ -341,6 +367,7 @@ export default function RecordPage() {
 
   return (
     <main className="min-h-screen bg-[#0a0a0a] text-neon flex flex-col items-center justify-center px-6 py-12">
+      <Navigation />
       <div className="bg-grain fixed inset-0 z-0 pointer-events-none opacity-20" />
       <div className="z-10 text-center flex flex-col gap-8 max-w-lg w-full">
         <header>
@@ -376,6 +403,18 @@ export default function RecordPage() {
           {isUploading && <div className="py-8 text-[10px] uppercase tracking-[0.4em] opacity-50 animate-pulse text-center">Sending…</div>}
           {isDone && <div className="flex flex-col gap-4 items-center"><p className="text-neon font-serif italic text-2xl">Message sent!</p><button type="button" onClick={reset} className="min-h-[44px] text-[10px] uppercase tracking-widest opacity-40 hover:opacity-80 transition-opacity touch-manipulation cursor-pointer">Leave another</button></div>}
         </div>
+
+        {(recState === 'idle' || recState === 'done') && (
+          <footer className="mt-12 animate-in fade-in slide-in-from-bottom-2 duration-1000">
+            <Link 
+              href={`/${params.slug}/inbox`}
+              className="group flex items-center justify-center gap-2 text-[10px] uppercase tracking-[0.4em] opacity-30 hover:opacity-100 transition-all duration-500"
+            >
+              View Recordings 
+            </Link>
+          </footer>
+        )}
+        <Footer />
       </div>
     </main>
   );

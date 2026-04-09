@@ -4,6 +4,7 @@ import { useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import Navigation from '@/components/Navigation';
+import Footer from '@/components/Footer';
 import { QRCodeCanvas } from 'qrcode.react'; // Import the QR component
 import { Copy, Check } from 'lucide-react';
 
@@ -84,10 +85,8 @@ export default function EventDashboard() {
             </div>
           </div>
         </div>
-
-        {/* Footer Hint */}
-        <p className="text-[10px] uppercase tracking-widest opacity-30">All messages are encrypted and stored in the cloud.</p>
       </section>
+      <Footer />
     </main>
   );
 }

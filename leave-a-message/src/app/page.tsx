@@ -1,6 +1,7 @@
 'use client';
 
 import Navigation from '@/components/Navigation';
+import Footer from '@/components/Footer';
 import HeroSection from '@/components/HeroSection';
 
 export default function HomePage() {
@@ -15,6 +16,7 @@ export default function HomePage() {
         <div className="flex-1 flex flex-col animate-in fade-in duration-1000">
           <HeroSection />
         </div>
+        <Footer />
       </div>
     </main>
   );
